@@ -206,13 +206,18 @@ RooFitResult *FitterAlgoBase::doFit(RooAbsPdf &pdf, RooAbsData &data, const RooA
     if (verbose>1) std::cout << "do first Minimization " << std::endl;
     TStopwatch tw; 
     if (verbose) tw.Start();
+    std::cout << "[debug] Starting minimization" << std::endl;
     bool ok = minim.minimize(verbose);
+    std::cout << "[debug] ok = " << ok << std::endl;
     if (verbose>1) {
        std::cout << "Minimized in : " ; tw.Print();
     }
     nll0Value_ =  nll0;
     nllValue_ =  nll->getVal() - nll0;
-    if (!ok && !keepFailures_) { std::cout << "Initial minimization failed. Aborting." << std::endl; return 0; }
+    if (!ok && !keepFailures_) { 
+      std::cout << "Initial minimization failed. Aborting." << std::endl; 
+      return 0; 
+    }
     if (doHesse) minim.minimizer().hesse();
     sentry.clear();
     ret = (saveFitResult || rs.getSize() ? minim.save() : new RooFitResult("dummy","success"));

@@ -4,6 +4,7 @@
 #include "RooRandom.h"
 #include "RooDataSet.h"
 #include "RooFitResult.h"
+#include "RooMinuit.h"
 #include "HiggsAnalysis/CombinedLimit/interface/RooMinimizerOpt.h"
 #include "TGraph.h"
 #include "TF1.h"
@@ -14,6 +15,7 @@
 #include "RooStats/LikelihoodIntervalPlot.h"
 #include "RooStats/HypoTestResult.h"
 #include "RooStats/RooStatsUtils.h"
+#include "HiggsAnalysis/CombinedLimit/interface/CachingNLL.h"
 #include "HiggsAnalysis/CombinedLimit/interface/Combine.h"
 #include "HiggsAnalysis/CombinedLimit/interface/CloseCoutSentry.h"
 #include "HiggsAnalysis/CombinedLimit/interface/utils.h"
@@ -291,7 +293,22 @@ bool ProfileLikelihood::runSignificance(RooWorkspace *w, RooStats::ModelConfig *
 
 
 double ProfileLikelihood::upperLimitWithMinos(RooAbsPdf &pdf, RooAbsData &data, RooRealVar &poi, const RooArgSet *nuisances, double tolerance, double cl) const {
-    std::auto_ptr<RooAbsReal> nll(pdf.createNLL(data, RooFit::Constrain(*nuisances)));
+    std::auto_ptr<RooAbsReal> nll(pdf.createNLL(data, RooFit::Constrain(*nuisances), RooFit::Verbose()));
+    if (fabs(nll->getVal()) < 10.) {
+      std::cout << "[ProfileLikelihood::upperLimitWithMinos] WARNING : Initial NLL has very low value, " << nll->getVal() << ". Calling migrad to get a better initial value." << std::endl;
+      RooMinuit(*nll).migrad();
+    }
+    std::cout << "[ProfileLikelihood::upperLimitWithMinos] DEBUG : Created nll, initial value = " << nll->getVal() << "/" << nll->getValV() << std::endl;
+    nll->Print();
+    pdf.Print();
+    data.Print();
+    nuisances->Print();
+    TIterator *iter = nuisances->createIterator();
+    RooRealVar *ivar = (RooRealVar*)iter->Next();
+    while (ivar) {
+      ivar->Print();
+      ivar = (RooRealVar*)iter->Next();
+    }
     RooMinimizerOpt minim(*nll);
     minim.setStrategy(0);
     minim.setPrintLevel(verbose-1);
@@ -316,6 +333,7 @@ double ProfileLikelihood::upperLimitWithMinos(RooAbsPdf &pdf, RooAbsData &data, 
 std::pair<double,double> ProfileLikelihood::upperLimitBruteForce(RooAbsPdf &pdf, RooAbsData &data, RooRealVar &poi, const RooArgSet *nuisances, double tolerance, double cl) const {
     poi.setConstant(false);
     std::auto_ptr<RooAbsReal> nll(pdf.createNLL(data, RooFit::Constrain(*nuisances)));
+    std::cout << "[ProfileLikelihood::upperLimitBruteForce] DEBUG : Created nll, initial value = " << nll->getVal() << std::endl;
     RooMinimizerOpt minim0(*nll);
     minim0.setStrategy(0);
     minim0.setPrintLevel(-1);

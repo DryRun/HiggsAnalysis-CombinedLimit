@@ -1,5 +1,6 @@
 #include <stdexcept>
 
+#include <TRandom3.h>
 #include "HiggsAnalysis/CombinedLimit/interface/Asymptotic.h"
 #include <RooRealVar.h>
 #include <RooArgSet.h>
@@ -168,7 +169,7 @@ bool Asymptotic::runLimit(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats
     *params_ = snapGlobalObsData;
     CascadeMinimizer minim(*nllD_, CascadeMinimizer::Unconstrained, r);
     minim.setStrategy(minimizerStrategy_);
-    minim.minimize(verbose-2);
+    minim.minimize(verbose-0);
     fitFreeD_.readFrom(*params_);
     minNllD_ = nllD_->getVal();
   }
@@ -185,7 +186,7 @@ bool Asymptotic::runLimit(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats
     *params_ = snapGlobalObsAsimov;
     CascadeMinimizer minim(*nllA_, CascadeMinimizer::Unconstrained, r);
     minim.setStrategy(minimizerStrategy_);
-    minim.minimize(verbose-2);
+    minim.minimize(verbose-0);
     fitFreeA_.readFrom(*params_);
     minNllA_ = nllA_->getVal();
     sentry.clear();
@@ -208,7 +209,26 @@ bool Asymptotic::runLimit(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats
   double clsMax = 1, clsMin = 0;
   for (int tries = 0; tries < 5; ++tries) {
     double cls = getCLs(*r, rMax);
-    if (cls == -999) { std::cerr << "Minimization failed in an unrecoverable way" << std::endl; break; }
+    if (cls == -999) { 
+      // Try to fix by perturbing r a few times
+      TRandom3 rand;
+      rand.SetSeed(100);
+      for (int tries2 = 0; tries2 < 10; ++tries2) {
+        double delta_rmax = rand.Gaus(0., (rMax - rMin) / 10.);
+        while (TMath::Abs(delta_rmax) > (rMax - rMin) / 10. * 3.) {
+          delta_rmax = rand.Gaus(0., (rMax - rMin) / 10.);
+        }
+        double test_rmax = rMax + delta_rmax;
+        cls = getCLs(*r, test_rmax);
+        if (cls != -999) {
+          rMax = test_rmax;
+          break;
+        }
+      }
+      if (cls == -999) {
+        std::cerr << "Minimization failed in an unrecoverable way" << std::endl; break;
+      }
+    } // End attempt to get a good CLs value
     if (cls < clsTarget) { clsMin = cls; break; }
     if (strictBounds_ && rMax == r->getMax()) {
         std::cout << "CLs at upper bound " << r->GetName() << " = " << r->getVal() << " is " << cls << ". Stopping search and using that as a limit.\n" << std::endl; 
@@ -219,6 +239,7 @@ bool Asymptotic::runLimit(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats
   }
   
   do {
+    std::cout << "[runLimit] DEBUG : New iteration with clsMin=" << clsMin << ", clsMax=" << clsMax << ", clsTarget=" << clsTarget << ", rMin=" << rMin << ", rMax=" << rMax << std::endl;
     if (clsMax < 3*clsTarget && clsMin > 0.3*clsTarget) {
         double rCross = rMin + (rMax-rMin)*log(clsMax/clsTarget)/log(clsMax/clsMin);
         if ((rCross-rMin) < (rMax - rCross)) {
@@ -231,8 +252,36 @@ bool Asymptotic::runLimit(RooWorkspace *w, RooStats::ModelConfig *mc_s, RooStats
         limit = 0.5*(rMin + rMax); 
         limitErr = 0.5*(rMax - rMin);
     }
+    std::cout << "[runLimit] DEBUG : Trying limit = " << limit << " +/- " << limitErr << std::endl;
     double cls = getCLs(*r, limit);
-    if (cls == -999) { std::cerr << "Minimization failed in an unrecoverable way" << std::endl; break; }
+    if (cls == -999) {
+      std::cout << "[runLimit] WARNING : Minimization failed. Attempting to re-run with slightly different parameters." << std::endl;
+      // Perturb limit a few times
+      TRandom3 rand;
+      rand.SetSeed(200);
+      for (int tries2 = 0; tries2 < 10; ++tries2) {
+        double delta_r = rand.Gaus(0., (rMax - rMin) / 10.);
+        while (TMath::Abs(delta_r) > (rMax - rMin) / 10. * 3.) {
+          delta_r = rand.Gaus(0., (rMax - rMin) / 10.);
+        }
+        cls = getCLs(*r, limit + delta_r);
+        if (cls != -999) {
+          limit = limit + delta_r;
+          std::cout << "[runLimit] WARNING : Found success with r=" << limit << std::endl;
+          break;
+        }
+      }
+      if (cls == -999) {
+        std::cerr << "Minimization failed in an unrecoverable way" << std::endl; break;
+      }
+    }
+    if (limitErr <= std::max(rRelAccuracy_ * limit, rAbsAccuracy_)) {
+      std::cout << "[debug] Condition for terminating search reached." << std::endl;
+      std::cout << "cls = " << cls << std::endl;
+      std::cout << "limit = " << limit << std::endl;
+      std::cout << "limitErr = " << limitErr << std::endl;
+    }
+
     if (cls > clsTarget) {
         clsMax = cls;
         rMin = limit;
@@ -261,14 +310,31 @@ double Asymptotic::getCLs(RooRealVar &r, double rVal, bool getAlsoExpected, doub
   r.setConstant(true);
   if (hasFloatParams_) {
       if (hasDiscreteParams_) {
-        if (!minimD.minimize(verbose-2) && picky_) return -999;
+        if (!minimD.minimize(verbose-0)) {
+          std::cout << "[runLimit] WARNING : minimD.minimize failed" << std::endl;
+          if (picky_) {
+            return -999;
+          }
+        }
       } else {
-	if (!minimD.improve(verbose-2) && picky_) return -999;
+        if (!minimD.improve(verbose-0)) {
+          std::cout << "[runLimit] WARNING : minimD.improve failed" << std::endl;
+          if (picky_) {
+            return -999;
+          }
+        }
       }
       fitFixD_.readFrom(*params_);
       if (verbose >= 2) fitFixD_.Print("V");
   }
-  double qmu = 2*(nllD_->getVal() - minNllD_); if (qmu < 0) qmu = 0;
+  std::cout << "[runLimit] DEBUG : minNllD_ = " << minNllD_ << std::endl;
+  double qmu = 2*(nllD_->getVal() - minNllD_); 
+  if (qmu < 0) {
+    std::cout << "[runLimit] DEBUG : q_mu = " << qmu << " < 0. Setting to zero." << std::endl;
+    std::cout << "[runLimit] DEBUG : nllD_->getVal() = " << nllD_->getVal() << std::endl;
+    std::cout << "[runLimit] DEBUG : minNllD_ = " << minNllD_ << std::endl;
+    qmu = 0;
+  }
   // qmu is zero when mu < mu^ (CMS NOTE-2011/005)
   // --> prevents us excluding from below
   if (what_ == "singlePoint" && rVal < rBestD_) {
@@ -290,14 +356,20 @@ double Asymptotic::getCLs(RooRealVar &r, double rVal, bool getAlsoExpected, doub
   r.setConstant(true);
   if (hasFloatParams_) {
       if (hasDiscreteParams_) {
-        if (!minimA.minimize(verbose-2) && picky_) return -999;
+        if (!minimA.minimize(verbose-0) && picky_) return -999;
       } else {
-	if (!minimA.improve(verbose-2) && picky_) return -999;
+	if (!minimA.improve(verbose-0) && picky_) return -999;
       }
       fitFixA_.readFrom(*params_);
       if (verbose >= 2) fitFixA_.Print("V");
   }
-  double qA  = 2*(nllA_->getVal() - minNllA_); if (qA < 0) qA = 0;
+  double qA  = 2*(nllA_->getVal() - minNllA_); 
+  if (qA < 0) {
+    std::cout << "[runLimit] DEBUG : q_A = " << qA << " < 0. Setting to zero." << std::endl;
+    std::cout << "[runLimit] DEBUG : nllA_->getVal() = " << nllA_->getVal() << std::endl;
+    std::cout << "[runLimit] DEBUG : minNllA_ = " << minNllA_ << std::endl;
+    qA = 0;
+  }
 
   double CLsb = ROOT::Math::normal_cdf_c(sqrt(qmu));
   double CLb  = ROOT::Math::normal_cdf(sqrt(qA)-sqrt(qmu));
@@ -338,6 +410,7 @@ std::vector<std::pair<float,float> > Asymptotic::runLimitExpected(RooWorkspace *
     //      mu_N = sigma * (normal_quantile(1 - quantile*(1-cl), 1.0) + normal_quantile(quantile));
     //
     // 1) get parameter of interest
+    printf("[debug] Running expected limits, please look forward to it!\n");
     RooArgSet  poi(*mc_s->GetParametersOfInterest());
     RooRealVar *r = dynamic_cast<RooRealVar *>(poi.first());
 
@@ -356,17 +429,20 @@ std::vector<std::pair<float,float> > Asymptotic::runLimitExpected(RooWorkspace *
     }
 
     // 2) get asimov dataset
+    //printf("[debug] Getting asimov dataset\n");
     RooAbsData *asimov = asimovDataset(w, mc_s, mc_b, data);
 
     // 2b) load asimov global observables
+    //printf("[debug] Loading asimov global observables\n");
     if (params_.get() == 0) params_.reset(mc_s->GetPdf()->getParameters(data));
     *params_ = snapGlobalObsAsimov;
 
     // 3) solve for q_mu
+    //printf("[debug] Solving for q_mu\n");
     r->setConstant(false);
     //r->setMin(0);
     r->setMin(qtilde_ ? 0 : -r->getMax()); // FIXME TEST
-    r->setVal(0.01*r->getMax());
+    r->setVal(0.0001*r->getMax());
     r->setError(0.1*r->getMax());
     //r->removeMax();
     
@@ -376,8 +452,14 @@ std::vector<std::pair<float,float> > Asymptotic::runLimitExpected(RooWorkspace *
     minim.setErrorLevel(0.5*pow(ROOT::Math::normal_quantile(1-0.5*(1-cl),1.0), 2)); // the 0.5 is because qmu is -2*NLL
                         // eventually if cl = 0.95 this is the usual 1.92!
     CloseCoutSentry sentry(verbose < 3);    
-    minim.minimize(verbose-2);
+    bool asimov_ok = minim.minimize(verbose-0);
+    if (!asimov_ok) {
+      // Retry fit
+      std::cout << "[runLimit] WARNING : Fit to asimov dataset failed! Continuing, but this is possibly a source of downstream problems." << std::endl;
+    }
     sentry.clear();
+    //printf("[debug] Not sure what!\n");
+
     if (verbose > 1) {
         std::cout << "Fit to asimov dataset:" << std::endl;
         std::auto_ptr<RooFitResult> res(minim.save());
@@ -390,36 +472,59 @@ std::vector<std::pair<float,float> > Asymptotic::runLimitExpected(RooWorkspace *
 
 
     // 3) get ingredients for equation 37
+    //printf("[debug] Eqn 37\n");
     double nll0 = nll->getVal();
+    //std::cout << "[debug] nll0 = " << nll0 << std::endl;
+    std::cout << "[debug] Calling findExpectedLimitFromCrossing with r=" << r->getVal() << ", rMin=" << r->getMin() << ", rMax=" << r->getMax() << ", nll0=" << nll0 << "." << std::endl;
     double median = findExpectedLimitFromCrossing(*nll, r, r->getMin(), r->getMax(), nll0, 0.5);
     double sigma  = median / ROOT::Math::normal_quantile(1-0.5*(1-cl),1.0);
     double alpha = 1-cl;
-    if (verbose > 0) { 
+    // (verbose > 0) { 
         std::cout << "Median for expected limits: " << median << std::endl; 
         std::cout << "Sigma  for expected limits: " << sigma  << std::endl; 
-    }
+    //}
 
     const double quantiles[5] = { 0.025, 0.16, 0.50, 0.84, 0.975 };
     for (int iq = 0; iq < 5; ++iq) {
+      printf("[debug] Getting quantile %.5f\n", quantiles[iq]);
+
         double N = ROOT::Math::normal_quantile(quantiles[iq], 1.0);
         if (newExpected_ && iq != 2) { // the median is exactly the same in the two methods
             std::string minosAlgoBackup = minosAlgo_;
             if (minosAlgo_ == "stepping") minosAlgo_ = "bisection";
             switch (iq) {
-                case 0: limit = findExpectedLimitFromCrossing(*nll, r, r->getMin(),            median,      nll0, quantiles[iq]); break;
-                case 1: limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median,      nll0, quantiles[iq]); break;
-                case 3: limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median+2*sigma, nll0, quantiles[iq]); break;
-                case 4: limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median+4*sigma, nll0, quantiles[iq]); break;
+                case 0: std::cout << "[runLimitExpected] DEBUG : Finding expected limit with rmin, rmax = " << r->getMin() << ", " <<           median         << std::endl; limit = findExpectedLimitFromCrossing(*nll, r, r->getMin(),            median,      nll0, quantiles[iq]); break;
+                case 1: std::cout << "[runLimitExpected] DEBUG : Finding expected limit with rmin, rmax = " << expected.back().second << ", " << median         << std::endl; limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median,      nll0, quantiles[iq]); break;
+                case 3: std::cout << "[runLimitExpected] DEBUG : Finding expected limit with rmin, rmax = " << expected.back().second << ", " << median+2*sigma << std::endl; limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median+2*sigma, nll0, quantiles[iq]); break;
+                case 4: std::cout << "[runLimitExpected] DEBUG : Finding expected limit with rmin, rmax = " << expected.back().second << ", " << median+4*sigma << std::endl; limit = findExpectedLimitFromCrossing(*nll, r, expected.back().second, median+4*sigma, nll0, quantiles[iq]); break;
             }
             minosAlgo_ = minosAlgoBackup;
-            if (std::isnan(limit)) { expected.clear(); break; } 
+            if (std::isnan(limit)) { 
+              //expected.clear(); break; 
+              std::cout << "[runLimitExpected] WARNING : asdf expected limit=nan for iq=" << iq << "! Setting to zero and continuing" << std::endl;
+              limit = 0;
+            } 
         } else {
+            std::cout << "[runLimitExpected] DEBUG : Median expected limit = sigma * X = " << sigma << " * " << (ROOT::Math::normal_quantile(1 - alpha * quantiles[iq], 1.0) + N) << std::endl;
             limit = sigma*(ROOT::Math::normal_quantile(1 - alpha * quantiles[iq], 1.0) + N);
+            // As sanity check, run bisection limit too
+            std::string minosAlgoBackup = minosAlgo_;
+            if (minosAlgo_ == "stepping") minosAlgo_ = "bisection";
+            double bisectionLimit = findExpectedLimitFromCrossing(*nll, r, r->getMin(), median, nll0, quantiles[iq]);
+            minosAlgo_ = minosAlgoBackup;
+            std::cout << "[runLimitExpected] DEBUG : Median expected limit = " << limit << std::endl;
+            std::cout << "[runLimitExpected] DEBUG : Safety check, median expected limit from bisection = " << bisectionLimit << std::endl;
+            if (limit) {
+              if (fabs(limit - bisectionLimit) / limit > 0.2) {
+                std::cout << "[runLimitExpected] WARNING : Median expected limit disagrees between method! Investigate further." << std::endl;
+              }
+            }
         }
         if (strictBounds_ && limit > r->getMax()) limit = r->getMax();
         limitErr = 0;
         Combine::commitPoint(true, quantiles[iq]);
         expected.push_back(std::pair<float,float>(quantiles[iq], limit));
+        //std::cout << "[debug] Adding expected limit " << quantiles[iq] << ", " << limit << std::endl;
     }
     return expected;
 
@@ -432,6 +537,7 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
     // but qmu = (mu_N/sigma)^2
     // --> qmu = [ N + normal_quantile_c( (1-cl)*CLb ) ]^2
     // remember that qmu = 2*nll
+    std::cout << "[findExpectedLimitFromCrossing] DEBUG : Called with clb = " << clb << std::endl;
     double N = ROOT::Math::normal_quantile(clb, 1.0);
     double errorlevel = 0.5 * pow(N+ROOT::Math::normal_quantile_c(clb*(1-cl),1.0), 2);
     int minosStat = -1;
@@ -442,7 +548,7 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
         minim.setStrategy(minimizerStrategy_);
         minim.setErrorLevel(errorlevel); 
         CloseCoutSentry sentry(verbose < 3);
-        minim.minimize(verbose-2);
+        minim.minimize(verbose-0);
         sentry.clear();
         for (int tries = 0; tries < 3; ++tries) {
             minosStat = minim.minimizer().minos(RooArgSet(*r));
@@ -453,7 +559,7 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
                     CascadeMinimizer minim2(nll, CascadeMinimizer::Unconstrained, r);
                     minim2.setStrategy(minimizerStrategy_);
                     minim2.setErrorLevel(errorlevel); 
-                    minim2.minimize(verbose-2);
+                    minim2.minimize(verbose-0);
                     minosStat = minim2.minimizer().minos(RooArgSet(*r));
                 }
                 break;
@@ -470,33 +576,234 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
         if (minosStat != -1) return r->getVal()+r->getAsymErrorHi();
     } else {
         double threshold = nll0 + errorlevel;
+        std::cout << "[findExpectedLimitFromCrossing] DEBUG : hasDiscreteParams_ = " << hasDiscreteParams_ << std::endl;
+        std::cout << "[findExpectedLimitFromCrossing] DEBUG : threshold = " << threshold << std::endl;
         if (strictBounds_) {
             if (rMax > r->getMax()) rMax = r->getMax();
             if (rMax == rMin) return rMax;
         }
-        double rCross = 0.5*(rMin+rMax), rErr = 0.5*(rMax-rMin);
+        double rCross = 0.5*(rMin+rMax);
+        std::cout << "[findExpectedLimitFromCrossing] WARNING : Increasing the range of rMin, rMax to help ensure the desired value is inside the range." << std::endl;
+        rMax = rMax * 2;
+        rMin = rMin / 2.;
+        double initialRMax = rMax;
+        double initialRMin = rMin;
+        double initialRCross = rCross;
+        double rErr = 0.5*(rMax-rMin);
         r->setVal(rCross); r->setConstant(true);
         CascadeMinimizer minim2(nll, CascadeMinimizer::Constrained);
         minim2.setStrategy(minimizerStrategy_);
         if (minosAlgo_ == "bisection") {
             if (verbose > 1) printf("Will search for NLL crossing by bisection\n");
+            std::cout << "[findExpectedLimitFromCrossing] DEBUG : Initial rCross, rErr = " << rCross << ", " << rErr << std::endl;
             if (strictBounds_) minosStat = 0; // the bracket is correct by construction in this case
+
+            //std::cout << "[findExpectedLimitFromCrossing] DEBUG : Printing a few NLL values" << std::endl;
+            //double saveR = r->getVal();
+            //for (int i = 0; i <= 10; ++i) {
+            //  double thisR = rMin + (rMax-rMin) / 10. * i;
+            //  r->setVal(thisR);
+            //  if (hasDiscreteParams_) {
+            //    minim2.minimize(verbose-2);
+            //  } else {
+            //    minim2.improve(verbose-2);
+            //  }
+            //  std::auto_ptr<RooFitResult> res2(minim2.save());
+            //  res2->Print("V");
+            //  std::cout << "[findExpectedLimitFromCrossing] DEBUG : \tr=" << thisR << ", NLL = " << nll.getVal() << std::endl;
+            //}
+            //r->setVal(saveR);
+
+            std::vector<double> checkedR;
+            std::vector<double> checkedNLL;
+            std::map<double, double> map_r_NLL;
+
+            bool robustBisection1 = false;
+            bool robustBisection2 = false;
+
             while (rErr > std::max(rRelAccuracy_*rCross, rAbsAccuracy_)) {
-                if (!strictBounds_ && rCross >= r->getMax()) r->setMax(rCross*1.1);
-                r->setVal(rCross);
-                bool ok = true;
-                { 
-                    CloseCoutSentry sentry2(verbose < 3);
-                    if (hasDiscreteParams_) ok = minim2.minimize(verbose-2);
-                    else ok = minim2.improve(verbose-2);
+                std::cout << "[findExpectedLimitFromCrossing] DEBUG : r = " << r->getVal() << " +/- " << (r->getMax() - r->getMin()) / 2. << std::endl;
+                if (!strictBounds_ && rCross >= r->getMax()) {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Increasing rMax to " << rCross * 1.1 << std::endl;
+                  r->setMax(rCross*1.1);
                 }
-                if (!ok && picky_) break; else minosStat = 0;
-                double here = nll.getVal();
+
+                double here = 0.;
+                if (robustBisection2) {
+                  std::cout << "[findExpectedLimitFromCrossing] INFO : Robust bisection 2 requested. Doing a floating fit first to reset the fit parameters." << std::endl;
+                  // Do fit with r floating to reset the parameters
+                  r->setConstant(false);
+                  r->setVal(0.);
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        minim2.minimize(verbose-0);
+                      } else {
+                        minim2.improve(verbose-0);
+                      }
+                  }
+                  r->setConstant(true);
+                }
+
+                if (robustBisection1) {
+                  std::cout << "[findExpectedLimitFromCrossing] INFO : Robust bisection 1 requested. Doing some extra fits to try to screen out false minima." << std::endl;
+                  // Calculate NLL at 0.25, 0.5, and 0.75 between rMin and rMax. Check that it is monotonic, and if not, take the median.
+                  std::pair<double, double> this_r_NLL[3];
+
+                  double r0p25 = 0.5 * (rCross + rMin);
+                  r->setVal(r0p25);
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        minim2.minimize(verbose-0);
+                      } else {
+                        minim2.improve(verbose-0);
+                      }
+                  }
+                  this_r_NLL[0] = std::pair<double, double>(r0p25, nll.getVal());
+                  checkedR.push_back(r0p25);
+                  checkedNLL.push_back(this_r_NLL[0].second);
+
+                  double r0p5 = rCross;
+                  r->setVal(r0p5);
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        minim2.minimize(verbose-0);
+                      } else {
+                        minim2.improve(verbose-0);
+                      }
+                  }
+                  this_r_NLL[1] = std::pair<double, double>(r0p5, nll.getVal());
+                  checkedR.push_back(r0p5);
+                  checkedNLL.push_back(this_r_NLL[1].second);
+
+                  double r0p75 = 0.5 * (rCross + rMax);
+                  r->setVal(r0p75);
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        minim2.minimize(verbose-0);
+                      } else {
+                        minim2.improve(verbose-0);
+                      }
+                  }
+                  this_r_NLL[2] = std::pair<double, double>(r0p75, nll.getVal());
+                  checkedR.push_back(r0p75);
+                  checkedNLL.push_back(this_r_NLL[2].second);
+
+                  // Take median NLL
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Choosing median from:" << std::endl;
+                  for (unsigned int i = 0; i < 3; ++i) {
+                    std::cout << "[findExpectedLimitFromCrossing] DEBUG : \tr=" << this_r_NLL[i].first << " / NLL = " << this_r_NLL[i].second << std::endl;
+                  }
+                  if ((this_r_NLL[0].second <= this_r_NLL[1].second && this_r_NLL[1].second <= this_r_NLL[2].second) || (this_r_NLL[0].second >= this_r_NLL[1].second && this_r_NLL[1].second >= this_r_NLL[2].second)) {
+                    rCross = this_r_NLL[1].first;
+                    here = this_r_NLL[1].second;
+                    r->setVal(r0p5);
+                  } else if ((this_r_NLL[0].second <= this_r_NLL[2].second && this_r_NLL[2].second <= this_r_NLL[1].second) || (this_r_NLL[0].second >= this_r_NLL[2].second && this_r_NLL[2].second >= this_r_NLL[1].second)) {
+                    rCross = this_r_NLL[2].first;
+                    here = this_r_NLL[2].second;
+                    r->setVal(r0p75);
+                  } else if ((this_r_NLL[1].second <= this_r_NLL[0].second && this_r_NLL[0].second <= this_r_NLL[2].second) || (this_r_NLL[1].second >= this_r_NLL[0].second && this_r_NLL[0].second >= this_r_NLL[2].second)) {
+                    rCross = this_r_NLL[0].first;
+                    here = this_r_NLL[0].second;
+                    r->setVal(r0p25);
+                  }
+                  // Redo fit to make sure it corresponds to the one we've chosen
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        minim2.minimize(verbose-0);
+                      } else {
+                        minim2.improve(verbose-0);
+                      }
+                  }
+
+                  
+                } else {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Setting r to rCross=" << rCross << std::endl;
+                  r->setVal(rCross);
+                  bool ok = true;
+                  { 
+                      CloseCoutSentry sentry2(verbose < 3);
+                      if (hasDiscreteParams_) {
+                        ok = minim2.minimize(verbose-0);
+                      } else {
+                        ok = minim2.improve(verbose-0);
+                      }
+                      std::cout << "[findExpectedLimitFromCrossing] DEBUG : ok = " << ok << std::endl;
+                  }
+                  if (!ok && picky_) break; else minosStat = 0;
+                  here = nll.getVal();
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : here = " << here << std::endl;
+                  checkedR.push_back(rCross);
+                  checkedNLL.push_back(here);
+                }
                 if (verbose > 1) printf("At %s = %f:\tdelta(nll) = %.5f\n", r->GetName(), rCross, here-nll0);
-                if (fabs(here - threshold) < 0.05*minimizerTolerance_) break;
-                if (here < threshold) rMin = rCross; else rMax = rCross;
+                if (fabs(here - threshold) < 0.05*minimizerTolerance_) {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : here - threshold < 0.05*minimizerTolerance_. Breaking." << std::endl;
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Printing fit result (rCross=" << rCross << ")" << std::endl;
+                  std::auto_ptr<RooFitResult> res2(minim2.save());
+                  res2->Print("V");
+                  break;
+                }
+                if (here < threshold) {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Setting rMin to rCross=" << rCross << std::endl;
+                  rMin = rCross; 
+                } else {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Setting rMax to rCross=" << rCross << std::endl;
+                  rMax = rCross;
+                }
                 rCross = 0.5*(rMin+rMax); rErr = 0.5*(rMax-rMin);
-            } 
+                std::cout << "[findExpectedLimitFromCrossing] DEBUG : New rCross, rErr = " << rCross << ", " << rErr << std::endl;
+
+                // Catch bad termination
+                if ((rErr <= std::max(rRelAccuracy_*rCross, rAbsAccuracy_)) && (fabs(here - threshold) >= 0.05*minimizerTolerance_)) {
+                  std::cout << "[findExpectedLimitFromCrossing] WARNING : rErr accuracy reached without finding threshold!" << std::endl;
+                  std::cout << "[findExpectedLimitFromCrossing] WARNING : here = " << here << " / threshold = " << threshold << " / tolerance = " << 0.05*minimizerTolerance_ << std::endl;
+                  std::cout << "Printing (r, nll) values:" << std::endl;
+                  for (unsigned int iChecked = 0; iChecked < checkedR.size(); ++iChecked) {
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : \t" << checkedR[iChecked] << ", " << checkedNLL[iChecked] << std::endl;
+                  }
+                  if (!robustBisection1 && false) {
+                    // Start over with more robust algorithm
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : Algorithm terminated because rErr reached sufficient accuracy, but crossing was not found. Redoing with a more robust algorithm." << std::endl;
+                    robustBisection1 = true;
+                    rCross = initialRCross;
+                    rMin = initialRMin;
+                    rMax = initialRMax;
+                    rErr = 0.5 * (rMax - rMin);
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : Forcing new parameters rCross=" << rCross << ", rMin=" << rMin << ", rMax=" << rMax << ", rErr=" << rErr << std::endl;
+//                  } else if (!robustBisection2) {
+//                    // Start over with even more robust algorithm
+//                    std::cout << "[findExpectedLimitFromCrossing] WARNING : Robust1 algorithm terminated because rErr reached sufficient accuracy, but crossing was not found. Redoing with an even more robust algorithm." << std::endl;
+//                    robustBisection2 = true;
+//                    rCross = initialRCross;
+//                    rMin = initialRMin;
+//                    rMax = initialRMax;
+//                    rErr = 0.5 * (rMax - rMin);
+                  } else {
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : Terminating bisection because rErr has reached sufficient accuracy, but crossing was not found with the more robust algorithm (here=" << here << ", threshold=" << threshold << ", r=" << rCross << ")" << std::endl;
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : I'm going to return the closest value to threshold " << threshold << " from the search. BUT CONSIDER RE_RUNNING THE LIMIT AT THIS POINT!" << std::endl;
+                    double best_dNLL = 1.e30;
+                    double best_rCross = rCross;
+                    for (unsigned int iChecked = 0; iChecked < checkedR.size(); ++iChecked) {
+                      double this_dNLL = fabs(checkedNLL[iChecked] - threshold);
+                      if (this_dNLL < best_dNLL) {
+                        best_dNLL = this_dNLL;
+                        best_rCross = checkedR[iChecked];
+                      }
+                    }
+                    std::cout << "[findExpectedLimitFromCrossing] WARNING : Best r = " << best_rCross << " with dNLL = " << best_dNLL << " (threshold dNLL was " << 0.05*minimizerTolerance_ << ")" << std::endl;
+                    rCross = best_rCross;
+                    break;
+                  }
+                }
+                if (rErr <= std::max(rRelAccuracy_*rCross, rAbsAccuracy_)) {
+                  std::cout << "[findExpectedLimitFromCrossing] DEBUG : Terminating bisection here! rErr = " << rErr << " has reached sufficient accuracy." << std::endl;
+                }
+            } // End while (rErr > std::max(rRelAccuracy_*rCross, rAbsAccuracy_))
         } else if (minosAlgo_ == "stepping") {
             if (verbose > 1) printf("Will search for NLL crossing by stepping.\n");
             rCross = 0.05 * rMax; rErr = rMax; 
@@ -511,8 +818,8 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
                 bool ok = true;
                 { 
                     CloseCoutSentry sentry2(verbose < 3);
-                    if (hasDiscreteParams_) ok = minim2.minimize(verbose-2);
-                    else ok = minim2.improve(verbose-2);
+                    if (hasDiscreteParams_) ok = minim2.minimize(verbose-0);
+                    else ok = minim2.improve(verbose-0);
                 }
                 if (!ok && picky_) break; else minosStat = 0;
                 double here = nll.getVal();
@@ -531,6 +838,9 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
                 }
                 if (overstepped) rErr = stride;
             }
+            std::cout << "[findExpectedLimitFromCrossing] DEBUG : Printing stepping fit result (rCross=" << rCross << ")" << std::endl;
+            std::auto_ptr<RooFitResult> res2(minim2.save());
+            res2->Print("V");
         } else if (minosAlgo_ == "new") {
             if (strictBounds_) throw std::invalid_argument("Asymptotic: --minosAlgo=new doesn't work with --strictBounds\n"); 
             if (verbose > 1) printf("Will search for NLL crossing with new algorithm.\n");
@@ -568,8 +878,8 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
                     { 
                         CloseCoutSentry sentry2(verbose < 3);
                         bool ok=true;
-			if (hasDiscreteParams_) ok = minim2.minimize(verbose-2);
-			else  ok = minim2.improve(verbose-2);
+			if (hasDiscreteParams_) ok = minim2.minimize(verbose-0);
+			else  ok = minim2.improve(verbose-0);
                         if (!ok && picky_) return std::numeric_limits<float>::quiet_NaN();
                     }
                     double nll_1_prof = nll.getVal();
@@ -612,8 +922,8 @@ float Asymptotic::findExpectedLimitFromCrossing(RooAbsReal &nll, RooRealVar *r, 
                bool ok = true;
                { 
                    CloseCoutSentry sentry2(verbose < 3); 
-                   if (hasDiscreteParams_) ok = minim2.minimize(verbose-2);
-		   else ok = minim2.improve(verbose-2);
+                   if (hasDiscreteParams_) ok = minim2.minimize(verbose-0);
+		   else ok = minim2.improve(verbose-0);
                }
                if (!ok && picky_) return std::numeric_limits<float>::quiet_NaN();
                double nll_prof = nll.getVal();

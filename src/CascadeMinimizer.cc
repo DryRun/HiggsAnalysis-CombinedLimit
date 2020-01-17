@@ -82,7 +82,9 @@ bool CascadeMinimizer::improve(int verbose, bool cascade)
     }
     bool outcome;
     do {
+      std::cout << "[CascadeMinimizer::improve] DEBUG : Calling improveOnce" << std::endl;
       outcome = improveOnce(verbose-1);
+      std::cout << "[CascadeMinimizer::improve] DEBUG : Flag 1 outcome = " << outcome << std::endl;
       if (cascade && !outcome && !fallbacks_.empty()) {
         int         nominalStrat(strategy_);
         if (verbose > 0) std::cerr << "Failed minimization with " << nominalType << "," << nominalAlgo << " and tolerance " << nominalTol << std::endl;
@@ -97,6 +99,7 @@ bool CascadeMinimizer::improve(int verbose, bool cascade)
                 minimizer_->setEps(ROOT::Math::MinimizerOptions::DefaultTolerance());
                 minimizer_->setStrategy(myStrategy);
                 outcome = improveOnce(verbose-2);
+                std::cout << "[CascadeMinimizer::improve] DEBUG : Flag 2 outcome = " << outcome << std::endl;
                 if (outcome) break;
             }
         }
@@ -120,7 +123,9 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
     if (oldFallback_){
         if (optConst) minimizer_->optimizeConst(std::max(0,optConst));
         if (rooFitOffset) minimizer_->setOffsetting(std::max(0,rooFitOffset));
+        std::cout << "[CascadeMinimizer::improveOnce] DEBUG : Calling nllutils::robustMinimize" << std::endl;
         outcome = nllutils::robustMinimize(nll_, *minimizer_, verbose, setZeroPoint_);
+        std::cout << "[CascadeMinimizer::improveOnce] DEBUG : outcome from nllutils::robustMinimize = " << outcome << std::endl;
     } else {
         cacheutils::CachingSimNLL *simnll = setZeroPoint_ ? dynamic_cast<cacheutils::CachingSimNLL *>(&nll_) : 0;
         if (simnll) simnll->setZeroPoint();
@@ -132,11 +137,14 @@ bool CascadeMinimizer::improveOnce(int verbose, bool noHesse)
             if (simnll) simnll->updateZeroPoint(); 
             minimizer_->setPrintLevel(verbose-1); 
         }
+        std::cout << "[CascadeMinimizer::improveOnce] DEBUG : Calling RooMinimizerOpt::minimize" << std::endl;
         int status = minimizer_->minimize(myType.c_str(), myAlgo.c_str());
+        std::cout << "[CascadeMinimizer::improveOnce] DEBUG : Flag 1 status = " << status << std::endl;
         if (lastHesse_ && !noHesse) {
             if (simnll) simnll->updateZeroPoint(); 
             minimizer_->setPrintLevel(std::max(0,verbose-3)); 
             status = minimizer_->hesse();
+            std::cout << "[CascadeMinimizer::improveOnce] DEBUG : Flag 2 status = " << status << std::endl;
             minimizer_->setPrintLevel(verbose-1); 
         }
         if (simnll) simnll->clearZeroPoint();
@@ -319,7 +327,7 @@ bool CascadeMinimizer::minimize(int verbose, bool cascade)
     	} 
 
       ret = improve(verbose, cascade);
-
+      std::cout << "[debug] Flag 1 ret = " << ret << std::endl;
     }else{
       // Do the discrete nuisance magic
 
@@ -347,10 +355,13 @@ bool CascadeMinimizer::minimize(int verbose, bool cascade)
         double minimumNLL = 10+nll_.getVal();
         std::vector<std::vector<bool>> contIndex;
         multipleMinimize(reallyCleanParameters,ret,minimumNLL,verbose,cascade,0,contIndex);
-   
+         std::cout << "Flag 2 ret = " << ret << std::endl;
+
         if (CascadeMinimizerGlobalConfigs::O().pdfCategories.getSize() > 1) {
            multipleMinimize(reallyCleanParameters,ret,minimumNLL,verbose,cascade,1,contIndex);
+      std::cout << "Flag 3 ret = " << ret << std::endl;
            multipleMinimize(reallyCleanParameters,ret,minimumNLL,verbose,cascade,2,contIndex);
+      std::cout << "Flag 4 ret = " << ret << std::endl;
         }
 
       }

@@ -23,7 +23,7 @@
 #endif
 
 //---- Uncomment this and set some of these to 1 to get more debugging
-#if 0
+#if 1
 #define DBG(X,Z) if (X) { Z; }
 #define DBGV(X,Z) if (X>1) { Z; }
 #define DBG_TestStat_params 0 // ProfiledLikelihoodRatioTestStatOpt::Evaluate; 1 = dump nlls; 2 = dump params at each eval
@@ -408,8 +408,13 @@ double ProfiledLikelihoodTestStatOpt::minNLL(bool constrained, RooRealVar *r)
 //============================================================ProfiledLikelihoodRatioTestStatExt
 bool nllutils::robustMinimize(RooAbsReal &nll, RooMinimizerOpt &minim, int verbosity, bool zeroPoint) 
 {
-    static bool do_debug = (runtimedef::get("DEBUG_MINIM") || runtimedef::get("DEBUG_PLTSO") > 1);
+    //static bool do_debug = (runtimedef::get("DEBUG_MINIM") || runtimedef::get("DEBUG_PLTSO") > 1);
+    static bool do_debug = true;
     double initialNll = nll.getVal();
+    if (fabs(initialNll) < 0.02) {
+        std::cerr << "[nllutils::robustMinimize] WARNING : Initial NLL = 0.! This is probably incorrect, so I'm setting it to a very large value to avoid false minimum errors." << std::endl;
+        initialNll = 1.e20;
+    }
     std::auto_ptr<RooArgSet> pars;
     bool ret = false;
     cacheutils::CachingSimNLL *simnll = (zeroPoint ?  dynamic_cast<cacheutils::CachingSimNLL *>(&nll) : 0);

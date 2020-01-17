@@ -70,6 +70,7 @@ private:
   TTree *limitsTree_;
   double readCL_;
   double readMU_;
+  std::string save_name_;
 
 };
 

@@ -264,16 +264,21 @@ bool MaxLikelihoodFit::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s,
   if (!reuseParams_) w->loadSnapshot("clean"); // Reset, also ensures nll_prefit is same in call to doFit for b and s+b
   r->setVal(preFitValue_); r->setConstant(false); 
   if (minos_ != "all") {
+    std::cout << "[debug] minos_ != all" << std::endl;
     RooArgList minos; if (minos_ == "poi") minos.add(*r);
     res_s = doFit(*mc_s->GetPdf(), data, minos, constCmdArg_s, /*hesse=*/!noErrors_,/*ndim*/1,/*reuseNLL*/ true); 
+    nll->Print();
     nll_sb_ = nll->getVal()-nll0;
   } else {
+    std::cout << "[debug] minos_ == all" << std::endl;
     CloseCoutSentry sentry(verbose < 2);
     RooArgList minos = (*mc_s->GetNuisanceParameters()); 
     minos.add((*mc_s->GetParametersOfInterest()));  // Add POI this time 
     res_s = doFit(*mc_s->GetPdf(), data, minos, constCmdArg_s, /*hesse=*/true,/*ndim*/1,/*reuseNLL*/ true); 
-    if (res_s) nll_sb_= nll->getVal()-nll0;
-
+    if (res_s) {
+      nll->Print();
+      nll_sb_= nll->getVal()-nll0;
+    }
   }
   if (res_s) { 
       limit    = r->getVal();
@@ -396,6 +401,7 @@ bool MaxLikelihoodFit::runSpecific(RooWorkspace *w, RooStats::ModelConfig *mc_s,
 	  std::cout << "Saving pdfs and data to MaxLikelihoodFitResult.root" << std::endl;
 	  ws->writeToFile("MaxLikelihoodFitResult.root");
   }
+  nll->Print();
   std::cout << "nll S+B -> "<<nll_sb_ << "  nll B -> " << nll_bonly_ <<std::endl;
   return fitreturn;
 }
